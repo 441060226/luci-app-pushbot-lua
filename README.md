@@ -1,3 +1,19 @@
+> # ⚠️ 来源声明
+>
+> **本仓库是派生仓库，不是原创项目。**
+>
+> - 原项目：[zzsj0928/luci-app-pushbot](https://github.com/zzsj0928/luci-app-pushbot)（本分支即其 **v3.61** 原版代码）
+> - 更早的原创：[tty228/luci-app-serverchan](https://github.com/tty228/luci-app-serverchan)
+>
+> 版权归原作者所有，**仅供学习交流使用**。
+> 上游项目未声明开源许可证，如需商用或二次分发，请先联系原作者。
+>
+> **本分支 `main` = 上游 v3.61 原版，未做任何修改**，仅作为对照基线保留。
+> 带功能增强的版本请看 [`custom-v3.61`](https://github.com/441060226/luci-app-pushbot-lua/tree/custom-v3.61) 分支，
+> 安装包下载见 [Releases](https://github.com/441060226/luci-app-pushbot-lua/releases)。
+
+---
+
 # 改名公告
 #### 2021年04月25日 起luci-app-serverchand 改名为 luci-app-pushbot
 
