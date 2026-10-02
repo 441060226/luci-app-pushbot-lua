@@ -1,3 +1,73 @@
+> # ⚠️ 来源声明
+>
+> **本仓库是派生版本，不是原创项目。**
+>
+> - 原项目：[zzsj0928/luci-app-pushbot](https://github.com/zzsj0928/luci-app-pushbot)（基于其 **v3.61**）
+> - 更早的原创：[tty228/luci-app-serverchan](https://github.com/tty228/luci-app-serverchan)
+>
+> 本仓库由 [@441060226](https://github.com/441060226) 在上游 v3.61 基础上修改而来，
+> **版权归原作者所有，仅供学习交流使用**。
+> 上游项目未声明开源许可证，如需商用或二次分发，请先联系原作者。
+>
+> - 本分支 `custom-v3.61`：**带功能增强的版本**（推荐使用）
+> - `main` 分支：上游 v3.61 原版代码，未做修改，便于对照
+> - 安装包下载：[**Releases**](https://github.com/441060226/luci-app-pushbot-lua/releases)
+
+---
+
+# 📦 本分支改动（相对上游 v3.61）
+
+### 推送渠道
+- 新增**企业微信应用**推送
+- 多平台推送重构：每个渠道使用独立临时文件，避免互相覆盖
+- 增加 curl 超时保护（连接 5s / 总 15s），单渠道失败不影响其它渠道
+- 返回值感知：`errcode` / `code` / `StatusCode` 非 0 视为失败并记录日志
+
+### 设备识别
+- 新增 MAC 设备信息数据库，支持**设备备注 / 别名**
+- 备注优先级高于自动解析的主机名
+
+### 在线设备页（新增页面）
+- 新增**实时速率列**（基于 conntrack 采样差值）
+- 备注列可直接编辑（失焦 / 回车保存）
+- 30 秒自动刷新，编辑过程中自动暂停渲染
+- **点击表头排序**：8 列全部支持，三态循环（降序 → 升序 → 取消），
+  按原始数值比较（IP 按数值段排序），排序状态通过 localStorage 持久化
+- 深色模式适配
+
+### 推送渠道说明页（新增页面）
+- 新增各渠道配置指引页面
+
+### 配置页
+- 重设计推送平台与凭据字段布局
+- 隐藏「推送模式（旧）」「设备别名」等冗余字段
+- 自动刷新提示语支持自定义
+
+### 依赖兼容
+- `wrtbwmon` 已被 OpenWrt 25.12 官方源移除
+- 增加依赖多源回退：优先 `wrtbwmon`，缺失时自动使用 `nlbwmon`
+- 依赖检测改为「两者都无」才告警
+
+### 稳定性修复
+- 修复 BusyBox ash 对负数做 `-ge` 比较报 `out of range` 并静默失败的问题
+  （改用 awk 计算 delta 并将负值 clamp 到 0）
+- 修复日志中内部标识符显示为友好渠道名
+- 修复手动发送失效、标题不同步等问题
+
+### 权限
+- 扩展 rpcd ACL：新增备注读写、设备列表接口
+
+### 安装包
+
+| 文件 | 适用系统 | 包管理器 |
+|---|---|---|
+| `luci-app-pushbot_3.61-2_all.ipk` | OpenWrt ≤ 24.10 | opkg |
+| `luci-app-pushbot_3.61-2_all.apk` | OpenWrt 25.12+ | apk |
+
+下载地址：[Releases](https://github.com/441060226/luci-app-pushbot-lua/releases)
+
+---
+
 # 改名公告
 #### 2021年04月25日 起luci-app-serverchand 改名为 luci-app-pushbot
 
@@ -42,7 +112,8 @@
 <img src="https://raw.githubusercontent.com/zzsj0928/ReadmeContents/main/Serverchand/MsgContentDetials.jpeg" width="500">
 
 # 下载
-- [luci-app-pushbot](https://github.com/zzsj0928/luci-app-pushbot/releases)
+- 本仓库（含本分支改动）：[441060226/luci-app-pushbot-lua Releases](https://github.com/441060226/luci-app-pushbot-lua/releases)
+- 上游原版：[zzsj0928/luci-app-pushbot Releases](https://github.com/zzsj0928/luci-app-pushbot/releases)
 
 
 -----------------------------------------------------
