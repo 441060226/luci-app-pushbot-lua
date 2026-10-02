@@ -2,10 +2,38 @@
 	"luci-app-pushbot": {
 		"description": "Grant UCI access for luci-app-pushbot",
 		"read": {
-			"uci": [ "pushbot" ]
+			"uci": [ "pushbot" ],
+			"ubus": {
+				"file": [ "read", "exec", "list" ]
+			},
+			"file": {
+				"/usr/libexec/pushbot-clients": [ "exec" ],
+				"/usr/libexec/pushbot-clients *": [ "exec" ],
+				"/usr/libexec/nlbwmon-notes": [ "exec" ],
+				"/usr/libexec/nlbwmon-notes *": [ "exec" ],
+				"/usr/libexec/nlbwmon-action": [ "exec" ],
+				"/usr/libexec/nlbwmon-action *": [ "exec" ],
+				"/usr/libexec/nlbwmon-live": [ "exec" ],
+				"/usr/libexec/nlbwmon-live *": [ "exec" ],
+				"/etc/nlbwmon/notes.json": [ "read", "write" ]
+			}
 		},
 		"write": {
-			"uci": [ "pushbot" ]
+			"uci": [ "pushbot" ],
+			"ubus": {
+				"file": [ "write", "exec" ]
+			},
+			"file": {
+				"/usr/libexec/pushbot-clients": [ "exec" ],
+				"/usr/libexec/pushbot-clients *": [ "exec" ],
+				"/usr/libexec/nlbwmon-notes": [ "exec" ],
+				"/usr/libexec/nlbwmon-notes *": [ "exec" ],
+				"/usr/libexec/nlbwmon-action": [ "exec" ],
+				"/usr/libexec/nlbwmon-action *": [ "exec" ],
+				"/usr/libexec/nlbwmon-live": [ "exec" ],
+				"/usr/libexec/nlbwmon-live *": [ "exec" ],
+				"/etc/nlbwmon/notes.json": [ "read", "write" ]
+			}
 		}
 	}
 }

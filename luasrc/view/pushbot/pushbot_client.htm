@@ -1,0 +1,242 @@
+<%
+local dsp = require "luci.dispatcher"
+-- 读取 Argon 主题的明暗模式设置，用于适配深色主题
+-- mode: normal(跟随系统) | dark(强制深色) | light(强制浅色)
+-- 注意：/etc/config/argon 里的 section 是匿名段（config global），
+--       UCI 地址为 argon.@global[0]，不是 argon.global，必须用 foreach 遍历。
+local argon_mode = "normal"
+local has_argon = false
+local uci_c = require "luci.model.uci".cursor()
+if require("nixio.fs").access("/etc/config/argon") then
+	uci_c:foreach("argon", "global", function(s)
+		has_argon = true
+		argon_mode = s.mode or "normal"
+	end)
+end
+-%>
+<style>
+/* ============================================================
+   在线设备页 —— 主题自适应样式
+   浅色为默认值，深色由 prefers-color-scheme / Argon dark 模式覆盖。
+   作用域限定在 pushbot 页面，避免污染其他页面。
+   ============================================================ */
+:root {
+	--oc-surface:      #ffffff;
+	--oc-surface-soft: #f7f9fb;
+	--oc-hover:        #fafcfe;
+	--oc-border:       #dfe6ee;
+	--oc-border-soft:  #eef2f6;
+	--oc-border-ctl:   #d4dde6;
+	--oc-text:         #1c2b3a;
+	--oc-text-strong:  #31465c;
+	--oc-text-muted:   #8a97a5;
+	--oc-text-faint:   #a8b3be;
+	--oc-mono:         #4a5a6a;
+	--oc-placeholder:  #b3bfcb;
+	--oc-btn-bg:       #ffffff;
+	--oc-btn-text:     #2c3e50;
+	--oc-btn-border:   #c5d3e0;
+	--oc-btn-hover-bg: #f2f7fc;
+	--oc-btn-hover-bd: #8bb2d4;
+	--oc-dl:           #c0392b;
+	--oc-ul:           #1e7f4f;
+	--oc-spin-track:   #cfd9e3;
+	--oc-save-bg:      #fffdf5;
+	--oc-save-bd:      #e8c56a;
+	--oc-saved-bg:     #f2fbf5;
+	--oc-saved-bd:     #7fc79b;
+	--oc-err-bg:       #fdf3f2;
+	--oc-err-bd:       #e39c95;
+}
+
+.oc-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0}
+.oc-toolbar .oc-spacer{flex:1}
+.oc-btn{display:inline-block;padding:4px 12px;font-size:13px;line-height:1.4;border:1px solid var(--oc-btn-border)!important;border-radius:4px;background:var(--oc-btn-bg)!important;color:var(--oc-btn-text)!important;cursor:pointer}
+.oc-btn:hover{background:var(--oc-btn-hover-bg)!important;border-color:var(--oc-btn-hover-bd)!important}
+.oc-btn.primary{background:#0078ff!important;border-color:#0078ff!important;color:#fff!important}
+.oc-btn.primary:hover{background:#0066dd!important;border-color:#0066dd!important}
+.oc-btn[disabled]{opacity:.5;cursor:not-allowed}
+.oc-status{font-size:92%;color:var(--oc-text-muted)}
+.oc-toggle{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--oc-mono);cursor:pointer;user-select:none}
+.oc-toggle input{cursor:pointer;margin:0}
+.oc-table{width:100%;border-collapse:collapse;font-size:13px}
+.oc-table th{text-align:left;padding:8px 10px;background:var(--oc-surface-soft);border-bottom:2px solid var(--oc-border);font-weight:600;color:var(--oc-text-strong);white-space:nowrap}
+.oc-table td{padding:8px 10px;border-bottom:1px solid var(--oc-border-soft);vertical-align:middle;color:var(--oc-text)}
+.oc-table tr:hover td{background:var(--oc-hover)}
+.oc-name{font-weight:600;color:var(--oc-text)}
+.oc-alias{display:block;font-size:88%;font-weight:400;color:var(--oc-text-muted);margin-top:1px}
+.oc-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:92%;color:var(--oc-mono)}
+.oc-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.oc-traffic .oc-dl{color:var(--oc-dl)}
+.oc-traffic .oc-ul{color:var(--oc-ul);margin-left:6px}
+.oc-live{white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:92%}
+.oc-live .oc-dl{color:var(--oc-dl);font-weight:600}
+.oc-live .oc-ul{color:var(--oc-ul);font-weight:600;margin-left:6px}
+.oc-live.idle{opacity:.45;font-weight:400}
+.oc-empty{padding:28px 10px;text-align:center;color:var(--oc-text-muted)}
+.oc-empty .oc-hint{font-size:92%;margin-top:6px;color:var(--oc-text-faint)}
+.oc-spin{display:inline-block;width:13px;height:13px;border:2px solid var(--oc-spin-track);border-top-color:#0078ff;border-radius:50%;animation:ocspin .8s linear infinite;vertical-align:-2px;margin-right:5px}
+@keyframes ocspin{to{transform:rotate(360deg)}}
+/* 备注输入框 —— 用 !important 压过 Argon dark.css 的 input{} 裸选择器 */
+.oc-note{width:100%;box-sizing:border-box;padding:4px 7px;font-size:13px;line-height:1.4;border:1px solid var(--oc-border-ctl)!important;border-radius:4px;background:var(--oc-surface)!important;color:var(--oc-text)!important}
+.oc-note::placeholder{color:var(--oc-placeholder)}
+.oc-note:focus{outline:none;border-color:#0078ff!important;box-shadow:0 0 0 2px rgba(0,120,255,.18)}
+.oc-note.saving{background:var(--oc-save-bg)!important;border-color:var(--oc-save-bd)!important}
+.oc-note.saved{background:var(--oc-saved-bg)!important;border-color:var(--oc-saved-bd)!important}
+.oc-note.err{background:var(--oc-err-bg)!important;border-color:var(--oc-err-bd)!important}
+
+/* ============================================================
+   表头点击排序：可视提示
+   ★ 宽度用 box-sizing:border-box + 内边距预留箭头位，
+     不改动模板里声明的 width 百分比，避免列宽跳动
+   ============================================================ */
+.oc-table th.oc-sortable{
+	box-sizing:border-box;
+	cursor:pointer;
+	user-select:none;-webkit-user-select:none;
+	position:relative;
+	padding-right:20px;            /* 给箭头留位 */
+	transition:background-color .12s ease,color .12s ease;
+}
+/* 悬停高亮 */
+.oc-table th.oc-sortable:hover{background:rgba(0,120,255,.10);color:#0078ff}
+/* 键盘可达 */
+.oc-table th.oc-sortable:focus-visible{outline:2px solid #0078ff;outline-offset:-2px;background:rgba(0,120,255,.12)}
+
+/* 箭头：未排序 ⇅(淡) / 升序 ▲ / 降序 ▼ */
+.oc-table th.oc-sortable::after{
+	content:"\21C5";
+	position:absolute;right:6px;top:50%;transform:translateY(-50%);
+	font-size:10px;line-height:1;opacity:.30;pointer-events:none;
+}
+.oc-table th.oc-sortable[data-sort-direction="asc"]::after{
+	content:"\25B2";opacity:1;color:#0078ff;font-size:9px;
+}
+.oc-table th.oc-sortable[data-sort-direction="desc"]::after{
+	content:"\25BC";opacity:1;color:#0078ff;font-size:9px;
+}
+/* 当前排序列文字高亮 */
+.oc-table th.oc-sortable[data-sort-direction]{color:#0078ff;font-weight:700}
+</style>
+<% if has_argon and argon_mode == "dark" then %>
+<style>
+/* Argon 强制深色模式 */
+:root {
+	--oc-surface:      #252526;
+	--oc-surface-soft: #252526;
+	--oc-hover:        #2c2c2d;
+	--oc-border:       #3c3c3c;
+	--oc-border-soft:  #333333;
+	--oc-border-ctl:   #4a4a4a;
+	--oc-text:         #d5d5d8;
+	--oc-text-strong:  #cccccc;
+	--oc-text-muted:   #99999f;
+	--oc-text-faint:   #7e7e85;
+	--oc-mono:         #aeadb5;
+	--oc-placeholder:  #767680;
+	--oc-btn-bg:       #2c2c2d;
+	--oc-btn-text:     #cccccc;
+	--oc-btn-border:   #4a4a4a;
+	--oc-btn-hover-bg: #3a3a3c;
+	--oc-btn-hover-bd: #5e72e4;
+	--oc-dl:           #ff7b6b;
+	--oc-ul:           #4fd18b;
+	--oc-spin-track:   #4a4a4a;
+	--oc-save-bg:      #3a3520;
+	--oc-save-bd:      #b99a45;
+	--oc-saved-bg:     #1f3527;
+	--oc-saved-bd:     #3f8f60;
+	--oc-err-bg:       #3a2320;
+	--oc-err-bd:       #a85548;
+}
+/* 表头排序提示：深色适配 */
+.oc-table th.oc-sortable:hover{background:rgba(77,159,255,.20);color:#4d9fff}
+.oc-table th.oc-sortable:focus-visible{background:rgba(77,159,255,.22)}
+.oc-table th.oc-sortable::after{opacity:.38}
+.oc-table th.oc-sortable[data-sort-direction="asc"]::after,
+.oc-table th.oc-sortable[data-sort-direction="desc"]::after{color:#4d9fff}
+.oc-table th.oc-sortable[data-sort-direction]{color:#4d9fff}
+</style>
+<% elseif not (has_argon and argon_mode == "light") then %>
+<style>
+/* 跟随系统：浏览器处于深色时启用深色配色 */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--oc-surface:      #252526;
+		--oc-surface-soft: #252526;
+		--oc-hover:        #2c2c2d;
+		--oc-border:       #3c3c3c;
+		--oc-border-soft:  #333333;
+		--oc-border-ctl:   #4a4a4a;
+		--oc-text:         #d5d5d8;
+		--oc-text-strong:  #cccccc;
+		--oc-text-muted:   #99999f;
+		--oc-text-faint:   #7e7e85;
+		--oc-mono:         #aeadb5;
+		--oc-placeholder:  #767680;
+		--oc-btn-bg:       #2c2c2d;
+		--oc-btn-text:     #cccccc;
+		--oc-btn-border:   #4a4a4a;
+		--oc-btn-hover-bg: #3a3a3c;
+		--oc-btn-hover-bd: #5e72e4;
+		--oc-dl:           #ff7b6b;
+		--oc-ul:           #4fd18b;
+		--oc-spin-track:   #4a4a4a;
+		--oc-save-bg:      #3a3520;
+		--oc-save-bd:      #b99a45;
+		--oc-saved-bg:     #1f3527;
+		--oc-saved-bd:     #3f8f60;
+		--oc-err-bg:       #3a2320;
+		--oc-err-bd:       #a85548;
+	}
+	/* 表头排序提示：深色适配 */
+	.oc-table th.oc-sortable:hover{background:rgba(77,159,255,.20);color:#4d9fff}
+	.oc-table th.oc-sortable:focus-visible{background:rgba(77,159,255,.22)}
+	.oc-table th.oc-sortable::after{opacity:.38}
+	.oc-table th.oc-sortable[data-sort-direction="asc"]::after,
+	.oc-table th.oc-sortable[data-sort-direction="desc"]::after{color:#4d9fff}
+	.oc-table th.oc-sortable[data-sort-direction]{color:#4d9fff}
+}
+</style>
+<% end %>
+
+<h2><%:在线设备%></h2>
+
+<div class="cbi-section">
+	<div class="oc-toolbar">
+		<button class="oc-btn primary" id="oc-refresh"><%:刷新%></button>
+		<button class="oc-btn" id="oc-scan"><%:扫描内网%></button>
+		<label class="oc-toggle">
+			<input type="checkbox" id="oc-active-only" checked>
+			<span><%:只看活跃设备%></span>
+		</label>
+		<span class="oc-spacer"></span>
+		<span class="oc-status" id="oc-status"></span>
+	</div>
+
+	<table class="oc-table" id="oc-table">
+		<thead>
+			<tr>
+				<th style="width:17%" data-sort-key="name"><%:客户端名%></th>
+				<th style="width:15%" data-sort-key="note"><%:备注%></th>
+				<th style="width:12%" data-sort-key="mac">MAC</th>
+				<th style="width:12%" data-sort-key="ip">IP</th>
+				<th style="width:13%" data-sort-key="live"><%:实时速率%></th>
+				<th style="width:14%" data-sort-key="traffic"><%:总计流量%></th>
+				<th style="width:10%" data-sort-key="dur"><%:在线时长%></th>
+				<th style="width:7%" data-sort-key="conns"><%:连接数%></th>
+			</tr>
+		</thead>
+		<tbody id="oc-body">
+			<tr><td colspan="8" class="oc-empty"><span class="oc-spin"></span><%:正在加载设备列表…%></td></tr>
+		</tbody>
+	</table>
+</div>
+
+<script type="text/javascript">
+//<![CDATA[
+window.OC_CLIENTS_API = '<%=dsp.build_url("admin/services/pushbot/clients")%>';
+window.OC_SETNOTE_API = '<%=dsp.build_url("admin/services/pushbot/setnote")%>';
+//]]>
+</script>
+<script type="text/javascript" src="<%=resource%>/view/pushbot/client.js?v=4"></script>

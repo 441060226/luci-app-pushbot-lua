@@ -1,0 +1,155 @@
+<%#
+ 推送平台联动：注入样式 + 脚本
+ ------------------------------------------------------------
+ 本模板挂在 DummyValue 字段（__pb_channels_ui）上，仅负责：
+   1) 输出「推送平台」复选框的胶囊样式
+   2) 输出平台分组标题样式
+   3) 引用联动脚本 pushbot_channels.js
+ 不产生任何可见控件。
+
+ ★ 深色模式说明（Argon）：
+   Argon 深色是独立的 dark.css，由 header.ut 内联进 <style>，
+   使用裸选择器（input{color:#ccc}、.cbi-dropdown{background:...}），
+   且【不会】在 <html>/<body> 上加 .dark 或 [data-darkmode] 标记。
+   因此必须读 /etc/config/argon 的 mode，自行输出深色变量。
+   注意：/etc/config/argon 的段是【匿名段】config global，
+        UCI 地址是 argon.@global[0]，不能用 uci:get("argon","global","mode")，
+        必须用 foreach 遍历。
+ -%>
+<%
+local argon_mode = "normal"
+local has_argon = false
+if require("nixio.fs").access("/etc/config/argon") then
+	local uci_c = require "luci.model.uci".cursor()
+	uci_c:foreach("argon", "global", function(s)
+		has_argon = true
+		argon_mode = s.mode or "normal"
+	end)
+end
+-%>
+<style>
+/* ===== 浅色（默认值）===== */
+:root{
+	--pbp-pill-bg:        #fafafa;
+	--pbp-pill-bg-hover:  rgba(0,120,255,.07);
+	--pbp-pill-border:    #d4d4d4;
+	--pbp-pill-text:      inherit;
+	--pbp-div-text:       #333;
+	--pbp-div-bg:         rgba(0,120,255,.06);
+	--pbp-div-bar:        #0078ff;
+}
+
+/* 平台分组小标题 —— 左竖线 + 加粗，把各平台配置区在视觉上分开 */
+.pb-plat-divider{
+	margin: 18px 0 8px 0;
+	padding: 4px 0 4px 10px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--pbp-div-text);
+	border-left: 3px solid var(--pbp-div-bar);
+	background: var(--pbp-div-bg);
+	border-radius: 0 4px 4px 0;
+	line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------
+   推送平台复选框：改成紧凑的胶囊按钮组
+   本版本 LuCI 的 MultiValue 渲染为 ui.Dropdown(multiple)，
+   每个 .cbi-checkbox 后跟一个 <br>，导致每行一个、行距巨大。
+   这里用 flex 网格重排，并隐藏多余 <br>。
+   ------------------------------------------------------------------ */
+#cbid\.pushbot\.pushbot\.pushbot_channels{
+	display: flex !important;
+	flex-wrap: wrap !important;
+	gap: 8px 10px !important;
+	align-items: center !important;
+	max-width: 900px;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels > br{
+	display: none !important;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox{
+	display: inline-flex !important;
+	align-items: center !important;
+	flex: 0 0 auto !important;
+	margin: 0 !important;
+	padding: 5px 12px !important;
+	border: 1px solid var(--pbp-pill-border) !important;
+	border-radius: 16px !important;
+	background: var(--pbp-pill-bg) !important;
+	color: var(--pbp-pill-text) !important;
+	line-height: 1.4 !important;
+	cursor: pointer;
+	transition: background .15s, border-color .15s;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox:hover{
+	border-color: #0078ff !important;
+	background: var(--pbp-pill-bg-hover) !important;
+}
+/* 已勾选：高亮描边，一眼看出选了哪些 */
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox:has(input:checked){
+	border-color: #0078ff !important;
+	background: var(--pbp-pill-bg-on) !important;
+	box-shadow: 0 0 0 1px rgba(0,120,255,.35) inset;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox input{
+	margin: 0 6px 0 0 !important;
+	flex: 0 0 auto !important;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox label{
+	margin: 0 !important;
+	padding: 0 !important;
+	font-weight: 400 !important;
+	white-space: nowrap;
+	color: inherit !important;
+}
+#cbid\.pushbot\.pushbot\.pushbot_channels .cbi-checkbox span{
+	margin: 0 !important;
+	color: inherit !important;
+}
+</style>
+<% if has_argon and argon_mode == "dark" then %>
+<style>
+/* ===== Argon 强制深色 ===== */
+:root{
+	--pbp-pill-bg:        #252526;
+	--pbp-pill-bg-hover:  rgba(77,159,255,.14);
+	--pbp-pill-bg-on:     rgba(0,120,255,.20);
+	--pbp-pill-border:    #3c3c3c;
+	--pbp-pill-text:      #d5d5d8;
+	--pbp-div-text:       #e6e6e6;
+	--pbp-div-bg:         rgba(77,159,255,.14);
+	--pbp-div-bar:        #4d9fff;
+}
+</style>
+<% elseif not (has_argon and argon_mode == "light") then %>
+<style>
+/* ===== 跟随系统（含未安装 Argon 的情况）===== */
+@media (prefers-color-scheme: dark){
+	:root{
+		--pbp-pill-bg:        #252526;
+		--pbp-pill-bg-hover:  rgba(77,159,255,.14);
+		--pbp-pill-bg-on:     rgba(0,120,255,.20);
+		--pbp-pill-border:    #3c3c3c;
+		--pbp-pill-text:      #d5d5d8;
+		--pbp-div-text:       #e6e6e6;
+		--pbp-div-bg:         rgba(77,159,255,.14);
+		--pbp-div-bar:        #4d9fff;
+	}
+}
+</style>
+<% end %>
+<style>
+/* 兜底：万一 Argon 深色模板仍带上标记（其他主题兼容），一并适配 */
+.dark, [data-darkmode="true"]{
+	--pbp-pill-bg:        #252526;
+	--pbp-pill-bg-hover:  rgba(77,159,255,.14);
+	--pbp-pill-bg-on:     rgba(0,120,255,.20);
+	--pbp-pill-border:    #3c3c3c;
+	--pbp-pill-text:      #d5d5d8;
+	--pbp-div-text:       #e6e6e6;
+	--pbp-div-bg:         rgba(77,159,255,.14);
+	--pbp-div-bar:        #4d9fff;
+}
+</style>
+<script type="text/javascript" src="<%=resource%>/view/pushbot/pushbot_channels.js"></script>

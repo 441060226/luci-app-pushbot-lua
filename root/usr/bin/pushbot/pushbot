@@ -18,10 +18,22 @@ function read_config(){
 	"pushbot_sheep" "starttime" "endtime" "pushbot_whitelist" "pushbot_blacklist" "pushbot_interface" "MAC_online_list" "MAC_offline_list" \
 	"up_timeout" "down_timeout" "timeout_retry_count" "thread_num" "soc_code" "pve_host" "pve_port"\
 	"err_enable" "err_sheep_enable" "err_device_aliases" "network_err_event" "system_time_event" "autoreboot_time" "network_restart_time" "public_ip_event" "public_ip_retry_count" \
-	"jsonpath" "dd_webhook" "we_webhook" "pp_token" "pp_channel" "pp_webhook" "pp_topic_enable" "pp_topic" "fs_webhook" "pushdeer_key" "pushdeer_srv_enable" "pushdeer_srv" "gotify_token" "gotify_srv" "bark_srv_enable" "bark_srv" "bark_token" "bark_sound" "bark_icon" "bark_icon_enable" "bark_level"
+	"jsonpath" "pushbot_channels" "dd_webhook" "we_webhook" "we_corpid" "we_corpsecret" "we_agentid" "we_touser" "pp_token" "pp_channel" "pp_webhook" "pp_topic_enable" "pp_topic" "fs_webhook" "pushdeer_key" "pushdeer_srv_enable" "pushdeer_srv" "bark_srv_enable" "bark_srv" "bark_token" "bark_sound" "bark_icon" "bark_icon_enable" "bark_level"
 	
+	# 检测包管理器版本（OpenWrt 24.10 及之前用 opkg，25.12 起用 apk）
+	if command -v opkg >/dev/null 2>&1; then
+		pkg_mgr="opkg"
+	elif command -v apk >/dev/null 2>&1; then
+		pkg_mgr="apk"
+	else
+		pkg_mgr="none"
+	fi
 	for str_version in "wrtbwmon" "iputils-arping" "curl" "iw"; do
-		eval `echo ${str_version:0:2}"_version"`=`opkg list-installed|grep -w ^${str_version}|awk '{print $3}'` 2>/dev/null
+		case "$pkg_mgr" in
+			opkg) eval `echo ${str_version:0:2}"_version"`=`opkg list-installed 2>/dev/null|grep -w ^${str_version}|awk '{print $3}'` 2>/dev/null ;;
+			apk)  eval `echo ${str_version:0:2}"_version"`=`apk list --installed 2>/dev/null|grep -w ^${str_version}|head -n1|sed -n 's/^[^ ]* \([^ ]*\).*/\1/p'` 2>/dev/null ;;
+			*)    eval `echo ${str_version:0:2}"_version"`="" ;;
+		esac
 	done
 	dir="/tmp/pushbot/" && mkdir -p ${dir}
 	tempjsonpath="/tmp/pushbot/temp.json"
@@ -32,6 +44,24 @@ function read_config(){
 	pushbot_whitelist=`echo "$pushbot_whitelist"|sed 's/ /\n/g'` 2>/dev/null
 	device_aliases=`echo "$device_aliases"|sed 's/ /\n/g'|sed 's/-/ /'` 2>/dev/null
 	err_device_aliases=`echo "$err_device_aliases"|sed 's/ /\n/g'` 2>/dev/null
+	# 设备备注（nlbwmon notes.json）—— 最高优先级名称来源，有备注则替换原设备名
+	notes_file="/etc/nlbwmon/notes.json"
+	notes_alias="${dir}notes_alias.txt"
+	: > "$notes_alias" 2>/dev/null
+	if [ -f "$notes_file" ]; then
+		awk '
+			{
+				s = $0
+				while (match(s, /"[0-9A-Fa-f:]+"[ \t]*:[ \t]*"[^"]*"/)) {
+					item = substr(s, RSTART, RLENGTH)
+					split(item, a, "\"")
+					mac = toupper(a[2]); txt = a[4]
+					printf "%s %s|", mac, txt
+					s = substr(s, RSTART + RLENGTH)
+				}
+			}
+		' "$notes_file" | tr '|' '\n' | grep -v '^$' > "$notes_alias" 2>/dev/null
+	fi
 	client_usage_whitelist=`echo "$client_usage_whitelist"|sed 's/ /\n/g'` 2>/dev/null
 	ip_white_list=`echo "$ip_white_list"|sed 's/ /\n/g'` 2>/dev/null
 	mark_mac_list="${MAC_online_list} ${MAC_offline_list}"
@@ -46,9 +76,36 @@ function read_config(){
 	[ -z "$timeout_retry_count" ] && timeout_retry_count="2";[ "$timeout_retry_count" -eq "0" ] && timeout_retry_count="1"
 	[ ! -z "$bark_token" ] && [ -z "$bark_srv" ] && bark_srv="https://api.day.app"
 	[ ! -z "$pushdeer_key" ] && [ -z "$pushdeer_srv" ] && pushdeer_srv="https://api2.pushdeer.com"
-
 	
+# 多平台推送渠道解析
+# pushbot_channels 为空格分隔的 json 路径列表，如：
+#   /usr/bin/pushbot/api/dingding.json /usr/bin/pushbot/api/ent_wechat.json
+# 兼容处理：
+#   1) 新配置 pushbot_channels（多选）优先
+#   2) 回退旧配置 jsonpath（单选）
+# 最终写入 channel_list（空格分隔），并由 channel_primary 保存主渠道（第一个）
+function parse_channels(){
+	channel_list=""
+	if [ ! -z "$pushbot_channels" ]; then
+		for __ch in $pushbot_channels; do
+			[ -f "$__ch" ] && channel_list="${channel_list} ${__ch}"
+		done
+		channel_list=`echo "$channel_list"|sed 's/^ *//'`
+	fi
+	# 无有效多渠道配置时回退到单选 jsonpath
+	if [ -z "$channel_list" ] && [ ! -z "$jsonpath" ] && [ -f "$jsonpath" ]; then
+		channel_list="$jsonpath"
+	fi
+	channel_primary=`echo "$channel_list"|awk '{print $1}'`
+	# 主渠道不存在时兜底到钉钉，保证后续 jq 不报错
+	[ -z "$channel_primary" ] && channel_primary="/usr/bin/pushbot/api/dingding.json"
+	channel_primary=`echo "$channel_primary"|sed 's/^ *//'`
+	unset __ch
+}
+
 # 字符串读取
+	parse_channels
+	jsonpath="$channel_primary"
 	str_title_start=`/usr/bin/jq -r '.str_title_start' ${jsonpath}`
 	str_title_end=`/usr/bin/jq -r '.str_title_end' ${jsonpath}`
 	str_linefeed=`/usr/bin/jq -r '.str_linefeed' ${jsonpath}`
@@ -84,48 +141,273 @@ function pushbot_init(){
 	add_ip_black
 	
 	rm -f ${dir}fd1 ${dir}sheep_usage ${dir}old_sheep_usage ${dir}client_usage_aliases ${dir}old_client_usage_aliases /usr/bin/pushbot/errlog >/dev/null 2>&1
-	[ ! -f "/usr/sbin/wrtbwmon" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】未安装 wrtbwmon ，流量统计不可用" >> ${logfile}
+	# 流量统计依赖：wrtbwmon（旧，已从官方源移除）或 nlbwmon（新，官方推荐）
+	# 两者任一可用即可；都没有才提示不可用
+	if [ ! -f "/usr/sbin/wrtbwmon" ] && [ ! -f "/usr/sbin/nlbwmon" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】未安装 wrtbwmon / nlbwmon，流量统计不可用" >> ${logfile}
+	fi
 	[ -z "$ip_version" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】无法获取依赖项 iputils-arping 版本号，请确认插件是否正常运行" >> ${logfile}
 	[ -z "$cu_version" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】无法获取依赖项 curl 版本号，请确认插件是否正常运行" >> ${logfile}
-	[ -z "${dd_webhook}${pp_token}${we_webhook}${fs_webhook}${bark_token}${pushdeer_key}${gotify_token}${gotify_srv}" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】请填写正确的Token/Webhook " >> ${logfile} && return 1
+	# 多平台：只要任意一个渠道配置了凭证即可启动
+	if [ -z "${dd_webhook}${pp_token}${we_webhook}${we_corpid}${fs_webhook}${bark_token}${pushdeer_key}" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】请填写正确的Token/Webhook " >> ${logfile}
+		return 1
+	fi
+	# 注：各渠道「未配置 → 跳过」的提示由发送阶段的 diy_send_one() 统一输出，
+	#     那里能指出具体缺失的字段，此处不再重复打印，避免同一件事出现两条日志。
 	local interfacelist=`getinterfacelist` && [ -z "$interfacelist" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】无法正确获取接口信息，请确认插件是否正常运行" >> ${logfile}
 	return 0
 }
 
-# 推送
+# 获取企业微信应用 access_token（带文件缓存，有效期 7200 秒，提前 300 秒刷新）
+function get_we_token(){
+	if [ -z "$we_corpid" ] || [ -z "$we_corpsecret" ]; then
+		return 1
+	fi
+	local token_cache="${dir}we_token.cache"
+	# 命中缓存直接返回
+	if [ -f "$token_cache" ]; then
+		local cache_time=`sed -n '1p' "$token_cache" 2>/dev/null`
+		local cache_token=`sed -n '2p' "$token_cache" 2>/dev/null`
+		local now=`date +%s`
+		if [ ! -z "$cache_time" ] && [ ! -z "$cache_token" ] && [ $((now - cache_time)) -lt 6900 ]; then
+			echo "$cache_token"
+			return 0
+		fi
+	fi
+	# 重新获取
+	local resp=`curl -s -k -m 10 "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${we_corpid}&corpsecret=${we_corpsecret}"`
+	local new_token=`echo "$resp"|/usr/bin/jq -r '.access_token' 2>/dev/null`
+	if [ -z "$new_token" ] || [ "$new_token" = "null" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】企业微信 gettoken 返回：${resp}" >> ${logfile}
+		return 1
+	fi
+	echo "`date +%s`" > "$token_cache"
+	echo "$new_token" >> "$token_cache"
+	echo "$new_token"
+	return 0
+}
+
+# 单渠道推送（内部函数）
+# 参数：$1=title $2=content $3=json模板路径
+# 渠道显示名映射：内部标识符（文件名）→ 用户可读的中文名
+# 用于日志输出，避免出现 ent_wechat / ent_wechat_app 这类英文标识
+function cname_cn(){
+	case "$1" in
+		dingding)        echo "钉钉" ;;
+		ent_wechat)      echo "企业微信机器人" ;;
+		ent_wechat_app)  echo "企业微信应用" ;;
+		feishu)          echo "飞书" ;;
+		bark)            echo "Bark" ;;
+		pushplus)        echo "PushPlus" ;;
+		pushdeer)        echo "PushDeer" ;;
+		diy)             echo "自定义推送" ;;
+		*)               echo "$1" ;;
+	esac
+}
+
+function diy_send_one(){
+	local __json="$3"
+	[ ! -f "$__json" ] && return 1
+
+	# 【修复】渠道未配置守卫：放在最前面，未配置的渠道直接标记 skipped（返回 2），
+	# 避免后续拼出畸形 URL 让 curl 静默"成功"（假成功），也避免无谓的网络请求。
+	local __cname=`basename "$__json" .json`
+	local __rawurl=`/usr/bin/jq -r .url ${__json}`
+	local __evalurl=`eval echo ${__rawurl}`
+	case "$__cname" in
+		dingding)
+			if [ -z "$dd_webhook" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Webhook，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		ent_wechat)
+			if [ -z "$we_webhook" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Webhook，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		ent_wechat_app)
+			if [ -z "$we_corpid" ] || [ -z "$we_corpsecret" ] || [ -z "$we_agentid" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 corpid/corpsecret/agentid，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		feishu)
+			if [ -z "$fs_webhook" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Webhook，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		pushplus)
+			if [ -z "$pp_token" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Token，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		bark)
+			if [ -z "$bark_srv" ] || [ -z "$bark_token" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Token/服务器，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		pushdeer)
+			if [ -z "$pushdeer_srv" ] || [ -z "$pushdeer_key" ]; then
+				echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 未填写 Key/服务器，已跳过" >> ${logfile}
+				return 2
+			fi
+			;;
+		diy)
+			# diy.json 是用户自由编辑的模板，凭据直接写在 url/type 里。
+			# 判定"未配置"：地址仍残留 Telegram 模板且 token 为空（.../bot/sendMessage）。
+			case "$__evalurl" in
+				*"/bot/sendMessage"*) echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] 模板未配置有效地址（${__evalurl}），已跳过" >> ${logfile}; return 2 ;;
+			esac
+			;;
+	esac
+	# URL 必须以 http 开头，否则 curl 会误当本地路径返回 0（假成功）
+	case "$__evalurl" in
+		http://*|https://*) : ;;
+		*) echo "`date "+%Y-%m-%d %H:%M:%S"` 【跳过】[$(cname_cn $__cname)] API 地址无效/未配置（${__evalurl}），已跳过" >> ${logfile}; return 2 ;;
+	esac
+
+	# 企业微信应用消息：token 需实时获取（有效期 7200 秒）
+	if ( echo "$__json"|grep -q "ent_wechat_app.json" ); then
+		local __we_token=`get_we_token`
+		if [ -z "$__we_token" ]; then
+			echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】企业微信应用 access_token 获取失败，请检查 corpid/corpsecret" >> ${logfile}
+			return 1
+		fi
+		# 将 token 暂存到配置，供后续 eval 展开使用
+		export we_token="$__we_token"
+	fi
+
+	local diyurl=`/usr/bin/jq -r .url ${__json}` && local diyurl=`eval echo ${diyurl}`
+	local type=`/usr/bin/jq -r '.type' ${__json}` && local type=`eval echo ${type}`
+	local data=`/usr/bin/jq -r '.data' ${__json}` && local data=`eval echo ${data}`
+	local content_type=`/usr/bin/jq -r '.content_type' ${__json}`
+	# 每个渠道使用独立临时文件，避免多渠道互相覆盖
+	local __tempjson="${tempjsonpath}.${__cname}"
+	data=`echo "$data"|sed "s#${tempjsonpath}#${__tempjson}#g"`
+	/usr/bin/jq ".type + $type" ${__json} > ${__tempjson}
+	/usr/bin/jq -r '.[]' ${__tempjson}|grep -w "null" && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 参数值错误，请检查设置项  `/usr/bin/jq -r '.' ${__tempjson}|grep "null"`" >> ${logfile} && rm -f ${__tempjson} && return 1
+	[ -f ${__tempjson} ] && local logrow=$(grep -c "" ${__tempjson}) || local logrow="0"
+	[ $logrow -eq "0" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] json 文件生成失败，请检查文件格式" >> ${logfile} && return 1
+	/usr/bin/jq -r '.[]' ${__tempjson}|grep "null" && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 参数变量生成失败，请检查设置项 `/usr/bin/jq -r '.' ${__tempjson}|grep "null"`" >> ${logfile}
+
+	# 带超时保护（连接 5s / 总 15s），单渠道失败不影响其它渠道
+	# 同时抓取 HTTP 状态码，非 2xx 视为失败
+	local __resp=`curl -s -k -m 15 --connect-timeout 5 -w "\n__HTTP__%{http_code}" -X POST -H "$content_type" -d "${data}" "${diyurl}" 2>/dev/null`
+	local __curl_rc=$?
+	local __http=`echo "$__resp"|sed -n 's/.*__HTTP__//p'|tail -1`
+	__resp=`echo "$__resp"|sed 's/__HTTP__[0-9]*$//'`
+	rm -f ${__tempjson}
+	if [ $__curl_rc -ne 0 ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 请求失败 curl=$__curl_rc" >> ${logfile}
+		return 1
+	fi
+	# HTTP 状态码感知：非 2xx 视为失败
+	if [ ! -z "$__http" ] && [ "$__http" -ge 400 ] 2>/dev/null; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] HTTP ${__http} 请求失败：${__resp}" >> ${logfile}
+		return 1
+	fi
+	# 返回值感知：errcode/code/StatusCode 非 0 视为失败
+	local __errcode=`echo "$__resp"|/usr/bin/jq -r '.errcode // .code // .StatusCode // empty' 2>/dev/null`
+	if [ ! -z "$__errcode" ] && [ "$__errcode" != "0" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 平台返回错误：${__resp}" >> ${logfile}
+		return 1
+	fi
+	# 布尔型返回感知：ok/result/success 为 false 视为失败（如 Telegram {"ok":false}）
+	local __okflag=`echo "$__resp"|/usr/bin/jq -r 'if (.ok // empty) == false then "false" elif (.success // empty) == false then "false" else empty end' 2>/dev/null`
+	if [ "$__okflag" = "false" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 平台返回失败：${__resp}" >> ${logfile}
+		return 1
+	fi
+	return 0
+}
+
+# 推送（多平台）
+# 参数：$1=title $2=content $3=（兼容旧调用）json路径；为空时使用 channel_list 全部渠道
+# 返回：全部渠道中只要有任意一个失败则返回 1，全部成功返回 0
 function diy_send(){
 	( ! echo "$lite_enable"|grep -q "content" ) && ( ! echo "$lite_enable"|grep -q "nowtime" ) && local nowtime=`date "+%Y-%m-%d %H:%M:%S"`
-	local diyurl=`/usr/bin/jq -r .url ${3}` && local diyurl=`eval echo ${diyurl}`
-	local type=`/usr/bin/jq -r '.type' ${3}` && local type=`eval echo ${type}`
-	local data=`/usr/bin/jq -r '.data' ${3}` && local data=`eval echo ${data}`
-	local content_type=`/usr/bin/jq -r '.content_type' ${3}`
-	/usr/bin/jq ".type + $type" ${jsonpath} > ${tempjsonpath}
-	/usr/bin/jq -r '.[]' ${tempjsonpath}|grep -w "null" && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】参数值错误，请检查设置项  `/usr/bin/jq -r '.' ${tempjsonpath}|grep "null"`" >> ${logfile} && return 1
-	[ -f ${tempjsonpath} ] && local logrow=$(grep -c "" ${tempjsonpath}) || local logrow="0"
-	[ $logrow -eq "0" ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】json 文件生成失败，请检查文件格式" >> ${logfile} && return 1
-	/usr/bin/jq -r '.[]' ${tempjsonpath}|grep "null" && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】参数变量生成失败，请检查设置项 `/usr/bin/jq -r '.' ${tempjsonpath}|grep "null"`" >> ${logfile}
-	
-	curl -X POST -H "$content_type" -d "${data}" "${diyurl}"
+	# 兼容旧调用：显式传入第 3 个参数时，只推送该渠道
+	local __send_list="$channel_list"
+	[ ! -z "$3" ] && __send_list="$3"
+	[ -z "$__send_list" ] && __send_list="$jsonpath"
+
+	# 逐渠道发送（curl 已带超时，单渠道慢不会无限阻塞）
+	local __rc=0
+	local __all=0
+	local __ok=0
+	local __skip=0
+	for __ch in $__send_list; do
+		local __cname=`basename "$__ch" .json`
+		__all=$((__all + 1))
+		diy_send_one "$1" "$2" "$__ch" >/dev/null 2>&1
+		local __one_rc=$?
+		if [ $__one_rc -eq 0 ]; then
+			__ok=$((__ok + 1))
+			echo "`date "+%Y-%m-%d %H:%M:%S"` [$(cname_cn $__cname)] 推送成功" >> ${logfile}
+		elif [ $__one_rc -eq 2 ]; then
+			# 未配置渠道：已跳过，不计入成功也不计入失败
+			__skip=$((__skip + 1))
+		else
+			echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】[$(cname_cn $__cname)] 推送失败" >> ${logfile}
+			__rc=1
+		fi
+	done
+	unset __ch
+	echo "`date "+%Y-%m-%d %H:%M:%S"` 【多平台推送】共 $__all 个渠道，成功 $__ok 个，跳过 $__skip 个，失败 $((__all - __ok - __skip)) 个" >> ${logfile}
+	unset __cname
+	return $__rc
 }
 
 # 下载设备MAC厂商信息
 function down_oui(){
+	# ★ 修复：原实现用 wget --no-check-certificate -t/-T，BusyBox wget 不识别这些参数，
+	#   会直接打印 Usage 后退出 → 文件从未下载成功，且因 [ -f oui.txt ] 判断失败而
+	#   完全不写日志，问题被静默掩盖。改用 curl（实测可正常下载 IEEE OUI 数据）。
 	[ -f ${oui_base} ] && local logrow=$(grep -c "" ${oui_base}) || local logrow="0"
+	# 库文件行数太少视为损坏，删除后重新下载
 	[ $logrow -lt "10" ] && rm -f ${oui_base} >/dev/null 2>&1
 	if [ ! -z "$oui_data" ] && [ "$oui_data" -ne "3" ] && [ ! -f ${oui_base} ]; then
 		echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】设备MAC厂商信息不存在，重新下载" >> ${logfile}
-		wget --no-check-certificate -t 3 -T 15 -O ${dir}oui.txt https://standards-oui.ieee.org/oui/oui.txt >/dev/null 2>&1
-		if [ -f ${dir}oui.txt ] && [ "$oui_data" -eq "1" ]; then
+		# 下载原始 OUI 数据（IEEE 官方，约 6~7MB）
+		curl -k -s -m 120 -o ${dir}oui.txt https://standards-oui.ieee.org/oui/oui.txt >/dev/null 2>&1
+		local __oui_raw=0
+		[ -f ${dir}oui.txt ] && __oui_raw=$(grep -c "base 16" ${dir}oui.txt 2>/dev/null)
+		[ -z "$__oui_raw" ] && __oui_raw=0
+		if [ "$__oui_raw" -lt "1000" ]; then
+			# ★ 下载失败/内容异常：明确记录，不再静默
+			echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】设备MAC厂商信息下载失败（原始数据仅 ${__oui_raw} 条，请检查网络或上游是否可达）" >> ${logfile}
+			rm -f ${dir}oui.txt ${oui_base} >/dev/null 2>&1
+			return 1
+		fi
+		local __oui_rc=1
+		if [ "$oui_data" -eq "1" ]; then
 			cat ${dir}oui.txt|grep "base 16"|grep -i "apple\|aruba\|asus\|autelan\|belkin\|bhu\|buffalo\|cctf\|cisco\|comba\|datang\|dell\|dlink\|dowell\|ericsson\|fast\|feixun\|\
 fiberhome\|fujitsu\|grentech\|h3c\|hisense\|hiwifi\|honghai\|honghao\|hp\|htc\|huawei\|intel\|jinli\|jse\|lenovo\|lg\|liteon\|malata\|meizu\|mercury\|meru\|moto\|netcore\|\
 netgear\|nokia\|omron\|oneplus\|oppo\|philips\|router_unkown\|samsung\|shanzhai\|sony\|start_net\|sunyuanda\|tcl\|tenda\|texas\|tianyu\|tp-link\|ubq\|undefine\|VMware\|\
-utstarcom\|volans\|xerox\|xiaomi\|zdc\|zhongxing\|smartisan" > ${oui_base} && echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】设备MAC厂商信息下载成功" >> ${logfile} || echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】设备MAC厂商信息下载失败" >> ${logfile} 
-		fi
-		if [ -f ${dir}oui.txt ] && [ "$oui_data" -eq "2" ]; then
-			cat ${dir}oui.txt|grep "base 16" > ${oui_base} && echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】设备MAC厂商信息下载成功" >> ${logfile} || echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】设备MAC厂商信息下载失败" >> ${logfile}
+utstarcom\|volans\|xerox\|xiaomi\|zdc\|zhongxing\|smartisan" > ${oui_base} 2>/dev/null && __oui_rc=0
+		elif [ "$oui_data" -eq "2" ]; then
+			cat ${dir}oui.txt|grep "base 16" > ${oui_base} 2>/dev/null && __oui_rc=0
 		fi
 		rm -f ${dir}oui.txt >/dev/null 2>&1
+		# 复核产物确实可用（有内容且行数达标），否则视为失败
+		local __oui_lines=0
+		[ -f ${oui_base} ] && __oui_lines=$(grep -c "" ${oui_base} 2>/dev/null)
+		[ -z "$__oui_lines" ] && __oui_lines=0
+		if [ "$__oui_rc" -eq "0" ] && [ "$__oui_lines" -ge "100" ]; then
+			echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】设备MAC厂商信息下载成功（${__oui_lines} 条记录）" >> ${logfile}
+		else
+			echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】设备MAC厂商信息生成失败（产物 ${__oui_lines} 条，需 ≥100 条）" >> ${logfile}
+			rm -f ${oui_base} >/dev/null 2>&1
+			return 1
+		fi
 	fi
+	return 0
 }
 
 # 清理临时文件
@@ -194,38 +476,74 @@ function getinterfaceuptime(){
 	getinterfacelist|grep \"uptime\"|sed $'s/\"uptime": //g'|sed $'s/\,//g'
 }
 
+# 规范化 MAC 地址：统一大写、冒号分隔，便于比较
+function norm_mac(){
+	echo "$1"|tr 'A-Z' 'a-z'|sed 's/-/:/g'|sed 's/[^0-9a-f:]//g'
+}
+
 # 查询 mac 地址
 function getmac(){
 	( echo "$tmp_mac"|grep -q "unknown" ) && unset tmp_mac # 为unknown时重新读取
 	[ -f "${dir}ipAddress" ] && [ -z "$tmp_mac" ] && local tmp_mac=`cat ${dir}ipAddress|grep -w ${1}|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
 	[ -f "${dir}tmp_downlist" ] && [ -z "$tmp_mac" ] && local tmp_mac=`cat ${dir}tmp_downlist|grep -w ${1}|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
 	[ -f "/var/dhcp.leases" ] && [ -z "$tmp_mac" ] && local tmp_mac=`cat /var/dhcp.leases|grep -w ${1}|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
+	[ -f "/tmp/dhcp.leases" ] && [ -z "$tmp_mac" ] && local tmp_mac=`cat /tmp/dhcp.leases|grep -w ${1}|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
 	[ -z "$tmp_mac" ] && local tmp_mac=`cat /proc/net/arp|grep "0x2\|0x6"|grep -w ${1}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1`
 	[ -z "$tmp_mac" ] && local tmp_mac="unknown"
+	# 统一 MAC 格式（大写冒号分隔），避免大小写/短横线导致匹配失败
+	( ! echo "$tmp_mac"|grep -q "unknown" ) && local tmp_mac=`norm_mac "$tmp_mac"`
 	echo "$tmp_mac"
 }
 
 # 查询主机名
 function getname(){
-	[ -z "$tmp_name" ] && local tmp_name=`echo "$device_aliases"|grep -i $2|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
+	# 【最高优先级】设备备注（nlbwmon notes.json）：有备注重一律用备注名替换原名
+	local notes_name=`grep -i -w "$(norm_mac $2)" "$notes_alias" 2>/dev/null|cut -d' ' -f2-|grep -v "^$"|sort -u|head -n1`
+	[ ! -z "$notes_name" ] && echo "$notes_name" && return
+	[ -z "$tmp_name" ] && local tmp_name=`echo "$device_aliases"|grep -i -w "$(norm_mac $2)"|awk '{print $2}'|grep -v "^$"|sort -u|head -n1`
 	[ -f "${dir}ipAddress" ] && [ -z "$tmp_name" ] && local tmp_name=`cat ${dir}ipAddress|grep -w ${1}|awk '{print $3}'|grep -v "^$"|sort -u|head -n1`
 	[ -f "${dir}tmp_downlist" ] && [ -z "$tmp_name" ] && local tmp_name=`cat ${dir}tmp_downlist|grep -w ${1}|awk '{print $3}'|grep -v "^$"|sort -u|head -n1`
 	( ! echo "$tmp_name"|grep -q -w "unknown\|*" ) && [ ! -z "$tmp_name" ] && echo "$tmp_name" && return || unset tmp_name # 为unknown时重新读取
-	[ -f "/var/dhcp.leases" ] && [ -z "$tmp_name" ] && local tmp_name=`cat /var/dhcp.leases|grep -w ${1}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1`
-	( ! echo "$tmp_name"|grep -q -w "unknown\|*" ) && [ ! -z "$tmp_name" ] && echo "$tmp_name" && return || unset tmp_name # 为unknown时重新读取
+	# 从 DHCP 租约读取主机名（去掉可能的引号与 * 占位）
+	for __lease in /var/dhcp.leases /tmp/dhcp.leases; do
+		[ -f "$__lease" ] && [ -z "$tmp_name" ] && local tmp_name=`cat $__lease 2>/dev/null|grep -w ${1}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1|sed 's/["*]//g'`
+		( ! echo "$tmp_name"|grep -q -w "unknown\|*" ) && [ ! -z "$tmp_name" ] && echo "$tmp_name" && return || unset tmp_name
+	done
 	[ -z "$dhcp_config" ] && dhcp_config=`uci show dhcp|grep "ip\|mac\|name"`
+	local __mac_norm=`norm_mac "$2"`
 	for dhcp_config_str in "host" "domain"; do
 		local dhcp_ip_n=`echo "$dhcp_config"|grep -w ^dhcp.@${dhcp_config_str}.*ip=.${1}|sed -nr 's#^dhcp.(.*).ip.*#\1#gp'` 2>/dev/null
 		[ ! -z "$dhcp_ip_n" ] && [ -z "$tmp_name" ] && local tmp_name=`uci get dhcp.${dhcp_ip_n}.name` 2>/dev/null
+		# 修复：MAC 匹配后必须用 dhcp_mac_n 取名称，原实现误用 dhcp_ip_n
 		local dhcp_mac_n=`echo "$dhcp_config"|grep -i ^dhcp.@${dhcp_config_str}.*mac=.${2}|sed -nr 's#^dhcp.(.*).mac.*#\1#gp'` 2>/dev/null
-		[ ! -z "$dhcp_mac_n" ] && [ -z "$tmp_name" ] && local tmp_name=`uci get dhcp.${dhcp_ip_n}.name` 2>/dev/null
+		[ -z "$dhcp_mac_n" ] && [ ! -z "$__mac_norm" ] && dhcp_mac_n=`echo "$dhcp_config"|sed 's/-/:/g'|grep -i ^dhcp.@${dhcp_config_str}.*mac=.${__mac_norm}|sed -nr 's#^dhcp.(.*).mac.*#\1#gp'` 2>/dev/null
+		[ ! -z "$dhcp_mac_n" ] && [ -z "$tmp_name" ] && local tmp_name=`uci get dhcp.${dhcp_mac_n}.name` 2>/dev/null
 		[ ! -z "$tmp_name" ] && break
 	done
 	( ! echo "$tmp_name"|grep -q -w "unknown\|*" ) && [ ! -z "$tmp_name" ] && echo "$tmp_name" && return || unset tmp_name # 为unknown时重新读取
-	[ -f "$oui_base" ] && local tmp_name=$(cat $oui_base|grep -i $(echo "$2"|cut -c 1,2,4,5,7,8)|sed -nr 's#^.*16)..(.*)#\1#gp'|sed 's/ /_/g')
-	[ ! -z "$oui_data" ] && [ "$oui_data" -eq "4" ] && local tmp_name=$(curl -sS "https://standards-oui.ieee.org/oui/oui.txt"|grep -i $(echo "$2"|cut -c 1,2,4,5,7,8)|sed -nr 's#^.*16)..(.*)#\1#gp'|sed 's/ /_/g')
+	# OUI 厂商库匹配（无厂商信息时返回空，由后续兜底）
+	[ -f "$oui_base" ] && local tmp_name=$(cat $oui_base 2>/dev/null|grep -i $(echo "$2"|cut -c 1,2,4,5,7,8)|sed -nr 's#^.*16)..(.*)#\1#gp'|sed 's/ /_/g'|head -n1)
 	[ -z "$tmp_name" ] && local tmp_name="unknown"
 	echo "$tmp_name"
+}
+
+# 美化设备名：当厂商/主机名无法识别时，用更友好的形式显示
+# 参数：$1=IP $2=MAC $3=原始名称
+function pretty_name(){
+	local __pname="$3"
+	if [ -z "$__pname" ] || ( echo "$__pname"|grep -q -w "unknown\|\*" ); then
+		# 未知设备：优先用 IP 末位区分，便于识别
+		if [ ! -z "$2" ] && ( ! echo "$2"|grep -q "unknown" ); then
+			echo "未知设备-$(echo "$2"|tr 'A-Z' 'a-z'|cut -c 13-17)"
+		elif [ ! -z "$1" ]; then
+			echo "未知设备-$(echo "$1"|awk -F. '{print $NF}')"
+		else
+			echo "未知设备"
+		fi
+	else
+		# 已知名称：去除首尾空格
+		echo "$__pname"|sed 's/^ *//;s/ *$//'
+	fi
 }
 
 # 查询设备接口
@@ -271,15 +589,56 @@ function soc_temp(){
 	[ ! -z "$soc_code" ] && eval `echo "$soc_code"` 2>/dev/null
 }
 
+# nlbwmon 数据源：按 MAC 查询累计流量
+# 返回：$1=mac 时输出人类可读字符串；$1=mac $2=bytes 时输出原始字节数
+# nlbwmon 输出 CSV 表头：family,proto,port,mac,ip,conns,rx_bytes,rx_pkts,tx_bytes,tx_pkts,layer7
+# 累计流量 = rx_bytes + tx_bytes（按 MAC 归并所有条目）
+function usage_nlbw(){
+	local __mac=$(norm_mac "$1")
+	[ -z "$__mac" ] && echo "${2:+0}" && return
+	[ ! -f "${dir}nlbw_snapshot" ] && { [ "$2" ] && echo 0 || echo `bytes_for_humans 0`; return; }
+	# 按 MAC 累加 rx+tx（awk 大数用字符串加法不安全，改用 awk 的多精度安全写法）
+	local __total=`awk -F'\t' -v m="$__mac" '
+		BEGIN{ tot=0; found=0 }
+		NR>1 {
+			mac=$4; gsub(/"/,"",mac)
+			if (tolower(mac)==tolower(m)) {
+				found=1
+				rx=$7+0; tx=$9+0
+				tot += rx + tx
+			}
+		}
+		END{ if (found) printf "%.0f", tot; else print "" }
+	' "${dir}nlbw_snapshot" 2>/dev/null`
+	if [ -z "$__total" ]; then
+		[ "$2" ] && echo 0 || echo `bytes_for_humans 0`
+		return
+	fi
+	[ "$2" ] && echo "$__total" || echo `bytes_for_humans "$__total"`
+}
+
 # 流量数据
 function usage(){
-	[ ! -f "/usr/sbin/wrtbwmon" ] || [ ! "$1" ] && return
+	[ ! -f "/usr/sbin/wrtbwmon" ] && [ ! -f "/usr/sbin/nlbwmon" ] && return
+	[ ! "$1" ] && return
+	local __use_nlbwmon=0
+	[ ! -f "/usr/sbin/wrtbwmon" ] && [ -f "/usr/sbin/nlbwmon" ] && __use_nlbwmon=1
+
 	if [ $1 == "update" ] ;then
+		if [ "$__use_nlbwmon" -eq "1" ]; then
+			# nlbwmon 数据源：抓取当前时刻的 CSV 快照供本轮查询使用
+			/usr/sbin/nlbw -c csv -o - > ${dir}nlbw_snapshot 2>/dev/null
+			return
+		fi
 		function version_le() { test "$(echo "$@"|tr " " "\n"|sort -n|head -n 1)" == "$1"; }
 		function version_ge() { test "$(echo "$@"|tr " " "\n"|sort -r|head -n 1)" == "$1"; }
 		[ ! -z "$wr_version" ] && ( version_ge "${wr_version}" "1.2.0" ) && wrtbwmon -f ${dir}usage.db 2>/dev/null && return
 		[ ! -z "$wr_version" ] && ( version_le "${wr_version}" "1.0.0" ) || [ -z "$wr_version" ] && wrtbwmon update ${dir}usage.db 2>/dev/null && return
 	elif [ $1 == "get" ] ;then
+		if [ "$__use_nlbwmon" -eq "1" ]; then
+			usage_nlbw "$2" "$3"
+			return
+		fi
 		[ ! -f "${dir}usage.db" ] && [ ! "$3" ] && echo `bytes_for_humans 0` && return
 		[ ! -f "${dir}usage.db" ] && [ "$3" ] && echo 0 && return
 		[ -z "$total_n" ] && total_n=`cat ${dir}usage.db|head -n1|grep "total"|sed 's/,/\n/g'|awk '/total/{print NR}'` 2>/dev/null
@@ -288,6 +647,8 @@ function usage(){
 		[ -z "$tmptotal" ] && local tmptotal="0"
 		[ ! "$3" ] && echo `bytes_for_humans ${tmptotal}` || echo "$tmptotal"
 	elif [ $1 == "down" ] ;then
+		# nlbwmon 模式无需清理单设备记录（数据由 nlbwmon 自行滚动管理）
+		[ "$__use_nlbwmon" -eq "1" ] && return
 		[ "$2" ] && sed -i "/,${2},/d" ${dir}usage.db 2>/dev/null
 	fi
 }
@@ -322,10 +683,15 @@ function get_client_usage(){
 			echo "$mac" `usage get ${mac} bytes` >> ${dir}client_usage_aliases
 			[ -f "${dir}old_client_usage_aliases" ] && get_client_usage_bytes=`cat ${dir}old_client_usage_aliases|grep -i -w $mac|awk '{print $2}'|grep -v "^$"|sort -u|head -n1` || continue
 			[ -z "$get_client_usage_bytes" ] && get_client_usage_bytes="0"
-			if [ "$((`usage get ${mac} bytes`-$get_client_usage_bytes))" -ge "$client_usage_max" ]; then
+			# ★ 溢出安全：busybox ash 对负数做 -ge 比较会报 "out of range" 且判定失败
+			#   （nlbwmon 每小时轮转 DB，设备累计值可能短暂回落 → delta 为负）。
+			#   用 awk 计算 delta 并 clamp 到 0，再做数值比较。
+			local __cur_bytes=`usage get ${mac} bytes`
+			local __delta=`awk -v a="$__cur_bytes" -v b="$get_client_usage_bytes" 'BEGIN{ d=a-b; if (d<0) d=0; printf "%.0f", d }'`
+			if awk -v d="$__delta" -v m="$client_usage_max" 'BEGIN{ exit !(d+0 >= m+0) }'; then
 				local ip=`cat ${dir}ipAddress|grep -i -w $mac|awk '{print $1}'|grep -v "^$"|sort -u|head -n1`
-				local ip_name=`getname ${ip} ${mac}`
-				local tmp_usage=$(bytes_for_humans $(expr `usage get ${mac} bytes` - ${get_client_usage_bytes}))
+				local ip_name=`pretty_name ${ip} ${mac} \`getname ${ip} ${mac}\``
+				local tmp_usage=$(bytes_for_humans ${__delta})
 				local time_up=`cat ${dir}ipAddress|grep -w ${ip}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1`
 				local ip_total=`usage get $mac` && [ ! -z "$ip_total" ] && local ip_total="${str_linefeed}${str_tab}总计流量： ${str_space}${str_space}${str_space}${str_space}${ip_total}"
 				local time1=`date +%s`
@@ -759,7 +1125,7 @@ function ip_changes(){
 function up(){
 	[ -f ${dir}ipAddress ] && ( cat ${dir}ipAddress|grep -q -w $1 ) && return
 	local ip_mac=`getmac $1`
-	local ip_name=`getname ${1} ${ip_mac}`
+	local ip_name=`pretty_name ${1} ${ip_mac} \`getname ${1} ${ip_mac}\``
 	local ip_interface=`getinterface ${ip_mac}`
 	getping ${1} ${up_timeout} "1";local ping_online=$?
 	if [ "$ping_online" -eq "0" ]; then
@@ -811,7 +1177,7 @@ function up(){
 # 检测设备离线
 function down(){
 	local ip_mac=`getmac $1`
-	local ip_name=`getname ${1} ${ip_mac}`
+	local ip_name=`pretty_name ${1} ${ip_mac} \`getname ${1} ${ip_mac}\``
 	local ip_interface=`getinterface ${ip_mac}`
 	getping ${1} ${down_timeout} ${timeout_retry_count};local ping_online=$?
 	if [ "$ping_online" -eq "1" ]; then
@@ -844,7 +1210,7 @@ function down_send(){
 		[ ! -z "$pushbot_blacklist" ] && local tmp_mac=`echo "${pushbot_blacklist}"|grep -w -i ${ip_mac}`
 		[ ! -z "$pushbot_whitelist" ] && local tmp_mac=`echo "${pushbot_whitelist}"|grep -w -i ${ip_mac}`
 		[ ! -z "$tmp_mac" ] && ( cat ${dir}ipAddress|grep -q -w -i ${tmp_mac} ) && continue
-		local ip_name=`getname ${ip} ${ip_mac}`
+		local ip_name=`pretty_name ${ip} ${ip_mac} \`getname ${ip} ${ip_mac}\``
 		local time_up=`cat ${dir}tmp_downlist|grep -w ${ip}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1`
 		local ip_total=`usage get $ip_mac` && [ ! -z "$ip_total" ] && local ip_total="${str_linefeed}${str_tab}总计流量： ${str_space}${str_space}${str_space}${str_space}${ip_total}"
 		local time1=`date +%s`
@@ -868,13 +1234,25 @@ function down_send(){
 function current_device(){
 	( echo "$lite_enable"|grep -q "content" ) || ( echo "$lite_enable"|grep -q "device" ) && return
 	[ -f ${dir}ipAddress ] && local logrow=$(grep -c "" ${dir}ipAddress) || local logrow="0";[ $logrow -eq "0" ] && return
-	[ -f ${dir}usage.db ] && local ip_total_db="总计流量${str_space}${str_space}${str_space}${str_space}"
+	# 流量统计可用即可显示表头（wrtbwmon 的 usage.db，或 nlbwmon 的 nlbw_snapshot 任一存在）
+	if [ -f ${dir}usage.db ] || [ -f ${dir}nlbw_snapshot ]; then local ip_total_db="总计流量${str_space}${str_space}${str_space}${str_space}"; fi
 	content="${content}${str_splitline}${str_title_start}${font_blue} 现有在线设备 ${logrow} 台，具体如下${font_end}${str_title_end}${str_linefeed}${str_tab}IP 地址${str_space}${str_space}${str_space}${str_space}${str_space}${str_space}${str_space}${str_space}${str_space}${ip_total_db}${boldstar}客户端名${boldstar}"
+	# 设备数上限：企业微信 markdown 内容上限 4096 字节，设备过多会导致整条推送失败
+	# 默认 20 台，配置项 pushbot.client_list_max 可覆盖
+	local __cl_max=`uci get pushbot.pushbot.client_list_max 2>/dev/null`
+	case "$__cl_max" in ''|*[!0-9]*) __cl_max=20 ;; esac
 	local IPLIST=`cat ${dir}ipAddress|awk '{print $1}'`
+	local __cl_i=0
 	for ip in $IPLIST; do
+		__cl_i=`expr $__cl_i + 1`
+		if [ "$__cl_i" -gt "$__cl_max" ]; then
+			local __cl_rest=`expr $logrow - $__cl_max`
+			content="${content}${str_linefeed}${str_tab}…… 另有 ${__cl_rest} 台设备未列出（超出上限 ${__cl_max} 台）"
+			break
+		fi
 		local ip_mac=`getmac ${ip}`
 		local ip_total=`usage get ${ip_mac}`
-		local ip_name=`getname ${ip} ${ip_mac}`
+		local ip_name=`pretty_name ${ip} ${ip_mac} \`getname ${ip} ${ip_mac}\``
 		local ip_name=`cut_str $ip_name 15`
 		if [ "${#ip}" -lt "15" ]; then
 			local n=`expr 15 - ${#ip}`
@@ -892,6 +1270,7 @@ function current_device(){
 		content="${content}${str_linefeed}${str_tab}${ip}${ip_total}${boldstar}${font_green2}${ip_name}${font_end2}${boldstar}"
 		unset i n ip_total ip_mac ip_name
 	done
+	unset __cl_i __cl_max __cl_rest
 }
 
 # 检测 cpu 状态
@@ -1152,7 +1531,9 @@ function send(){
 			local send_content="${send_content}${str_linefeed}${str_tab}ipv6 :${send_wanIPv6}"
 			local send_content="${send_content}${str_linefeed}${str_tab}外网v6:${send_hostIPv6}"
 		fi
-		( ! echo "$send_wanIP"|grep -q -w ${send_hostIP} ) && local send_content="${send_content}${str_linefeed}${str_tab}外网 ip 与接口 ip 不一致，你的 ip 不是公网 ip"
+		# 【修复】旁路由/无外网 IP 场景下 send_hostIP 可能为空，
+		# 空 pattern 会让 grep -q -w 打印 Usage 并返回 2。加非空判断。
+		[ ! -z "$send_hostIP" ] && ( ! echo "$send_wanIP"|grep -q -w "${send_hostIP}" ) && local send_content="${send_content}${str_linefeed}${str_tab}外网 ip 与接口 ip 不一致，你的 ip 不是公网 ip"
 		local interfaceuptime=`getinterfaceuptime`
 		[ ! -z "$interfaceuptime" ] && local wanstatustime=`getinterfaceuptime|awk -F. '{run_days=$1 / 86400;run_hour=($1 % 86400)/3600;run_minute=($1 % 3600)/60;run_second=$1 % 60;printf("在线时间：%d天%d时%d分%d秒",run_days,run_hour,run_minute,run_second)}'` && unset run_days run_hour run_minute run_second
 		local send_content="${send_content}${str_linefeed}${str_tab}${wanstatustime}"
@@ -1163,23 +1544,44 @@ function send(){
 		local IPLIST=`cat ${dir}ipAddress 2>/dev/null|awk '{print $1}'`
 		[ -f ${dir}ipAddress ] && local logrow=$(grep -c "" ${dir}ipAddress) || local logrow="0"
 		[ "$logrow" -eq "0" ] && local send_content="${send_content}${str_splitline}${str_title_start}${font_red} 当前无在线设备${font_end}${str_title_end}" || local send_content="${send_content}${str_splitline}${str_title_start}${font_blue} 现有在线设备 ${logrow} 台${font_end}${str_title_end}"
+		# 设备数上限：企业微信 markdown 内容上限 4096 字节，设备过多会导致整条推送失败
+		local __cl_max=`uci get pushbot.pushbot.client_list_max 2>/dev/null`
+		case "$__cl_max" in ''|*[!0-9]*) __cl_max=20 ;; esac
+		local __cl_i=0
 		for ip in $IPLIST; do
+			__cl_i=`expr $__cl_i + 1`
+			if [ "$__cl_i" -gt "$__cl_max" ]; then
+				local __cl_rest=`expr $logrow - $__cl_max`
+				local send_content="${send_content}${str_linefeed}${str_tab}…… 另有 ${__cl_rest} 台设备未列出（超出上限 ${__cl_max} 台）"
+				break
+			fi
 			local time_up=`cat ${dir}ipAddress|grep -w ${ip}|awk '{print $4}'|grep -v "^$"|sort -u|head -n1`
 			local time1=`date +%s`
 			local time1=$(time_for_humans `expr ${time1} - ${time_up}`)
 			local ip_mac=`getmac ${ip}`
-			local ip_name=`getname ${ip} ${ip_mac}`
+			local ip_name=`pretty_name ${ip} ${ip_mac} \`getname ${ip} ${ip_mac}\``
 			local ip_total=`usage get ${ip_mac}`;[ ! -z "$ip_total" ] && local ip_total="总计流量：${ip_total}  "
 			local ip_name=`cut_str $ip_name 18`
 			local send_content="${send_content}${str_linefeed}${str_tab}${font_green2}【${ip_name}】${font_end2}  ${ip}${str_linefeed}${str_tab}${ip_total}在线 ${time1}"
 			unset ip_total time_down time_up time1 ip_mac ip_name
 		done
+		unset __cl_i __cl_max __cl_rest
 	fi
 
 	[ ! -z "$device_name" ] && local send_title="【$device_name】${send_title}"
 	[ -z "$send_content" ] && local send_content="${str_splitline}${str_title_start} 我遇到了一个难题${str_title_end}${str_linefeed}${str_tab}定时发送选项错误，你没有选择需要发送的项目，该怎么办呢${str_splitline}"
-	[ "$send_disturb" -eq "0" ] && diy_send "${send_title}" "${send_content}" "${jsonpath}" >/dev/null 2>&1
-	[ $? -eq 1 ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】定时推送失败，请检查网络或设置信息" >> ${logfile} || echo "`date "+%Y-%m-%d %H:%M:%S"` ${disturb_text}定时推送任务完成" >> ${logfile}
+	# 修复：原实现用 $? 捕获的是 [ ] 判断结果而非 diy_send 返回值，导致成功也报失败
+	local __send_rc=0
+	if [ "$send_disturb" -eq "0" ]; then
+		diy_send "${send_title}" "${send_content}" >/dev/null 2>&1
+		__send_rc=$?
+	fi
+	if [ "$__send_rc" -eq 1 ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】定时推送失败，请检查网络或设置信息" >> ${logfile}
+	else
+		echo "`date "+%Y-%m-%d %H:%M:%S"` ${disturb_text}定时推送任务完成" >> ${logfile}
+	fi
+	unset __send_rc
 	deltemp
 }
 
@@ -1200,11 +1602,11 @@ unset i
 
 # 启动参数
 if [ "$1" ] ;then
-	[ $1 == "send" ] && send
-	[ $1 == "soc" ] && echo `soc_temp` > ${dir}soc_tmp
-	[ $1 == "client" ] && get_client
-	[ $1 == "test" ] && send test
-	exit
+	[ "$1" == "send" ] && send
+	[ "$1" == "soc" ] && echo `soc_temp` > ${dir}soc_tmp
+	[ "$1" == "client" ] && get_client
+	[ "$1" == "test" ] && send test
+	exit 0
 fi
 
 # 载入在线设备
@@ -1214,7 +1616,18 @@ echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】载入在线设备" >> ${logfil
 echo "`date "+%Y-%m-%d %H:%M:%S"` 【初始化】初始化完成" >> ${logfile}
 
 # 循环
+# 脚本自更新守卫：ash 按字节偏移流式读取脚本，原地替换文件后
+# 运行中的守护进程仍在执行旧代码（编辑内容落在已消费的偏移之前）。
+# 每轮校验脚本 md5，一旦变化即退出，由 init 脚本拉起新进程。
+__self_md5=`md5sum /usr/bin/pushbot/pushbot 2>/dev/null|awk '{print $1}'`
+echo "$__self_md5" > ${dir}self_md5 2>/dev/null
 while [ "$pushbot_enable" -eq "1" ]; do
+	__now_md5=`md5sum /usr/bin/pushbot/pushbot 2>/dev/null|awk '{print $1}'`
+	if [ ! -z "$__self_md5" ] && [ ! -z "$__now_md5" ] && [ "$__self_md5" != "$__now_md5" ]; then
+		echo "`date "+%Y-%m-%d %H:%M:%S"` 【自更新】检测到脚本变更，重启守护进程以加载新代码" >> ${logfile}
+		/etc/init.d/pushbot restart >/dev/null 2>&1 &
+		exit 0
+	fi
 	deltemp
 	usage update
 	pushbot_disturb;disturb=$?
@@ -1264,7 +1677,7 @@ while [ "$pushbot_enable" -eq "1" ]; do
 	if [ ! -f "${dir}send_enable.lock" ] && [ ! -z "$title" ] && [ ! -z "$content" ]; then
 		[ ! -z "$device_name" ] && title="【$device_name】$title"
 		( echo "$lite_enable"|grep -q "content" ) && content="$title"
-		[ "$disturb" -eq "0" ] && diy_send "${title}" "${content}" "${jsonpath}" >/dev/null 2>&1
+		[ "$disturb" -eq "0" ] && diy_send "${title}" "${content}" >/dev/null 2>&1
 		[ $? -eq 1 ] && echo "`date "+%Y-%m-%d %H:%M:%S"` 【！！！】推送失败，请检查网络或设置信息 " >> ${logfile}
 	fi
 	

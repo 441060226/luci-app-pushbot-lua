@@ -1,0 +1,36 @@
+{
+    "_api": "这是企业微信【应用消息】api 文件",
+    "_api": "【企业微信-应用】",
+    "_readme": "企业微信自建应用推送，支持 markdown 消息",
+    "_readme": "需要 corpid（企业ID）、corpsecret（应用密钥）、agentid（应用ID）",
+    
+    "url": "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${we_token}",
+    "data": "@${tempjsonpath}",
+    "content_type": "Content-Type: application/json",
+    "str_title_start": "#### ",
+    "str_title_end": "",
+    "str_linefeed": "\\n",
+    "str_splitline": "\\n------\\n",
+    "str_space": " ",
+    "str_tab": " ",
+    "table_tab": "<font color=#76CCFF>┋</font>",
+    "font_green": "<font color=#92D050>",
+    "font_green2": "<font color=#92D050>",
+    "font_red": "<font color=#FF6666>",
+    "font_blue": "<font color=#76CCFF>",
+    "font_purple": "<font color=#6A65FF>",
+    "font_end": "</font>",
+    "font_end2": "</font>",
+    "percentsym": "",
+    "boldstar": "**",
+    "type":
+      {
+	      "touser": "\"${we_touser}\"",
+	      "msgtype": "\"markdown\"",
+	      "agentid": "${we_agentid}",
+	      "markdown": {
+			"content": "\"${str_title_start}${font_purple}${1}${font_end}${str_title_end}${str_linefeed}${nowtime}${str_linefeed}${2}\""
+	      },
+	      "safe": "0"
+      }
+}
