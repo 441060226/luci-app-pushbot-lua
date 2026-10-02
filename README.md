@@ -101,15 +101,27 @@
 - 自20210911之后的版本，支持Bark群组，群组名默认为设备名
 - 自20210901之后的版本，增加依赖jq，请重新编译或在安装前同步安装jq
 
-# 显示效果
-## 通知栏：直接显示推送主题，一目了然，按设备不同，分组显示
-<img src="https://raw.githubusercontent.com/zzsj0928/ReadmeContents/main/Serverchand/Msg.Notification.jpg" width="500">
+# 界面预览
 
-## 消息列表：直接显示最新推送的标题
-<img src="https://raw.githubusercontent.com/zzsj0928/ReadmeContents/main/Serverchand/Msg.List.jpg" width="500">
+> 以下为**本分支（custom-v3.61）**的实际界面截图。
 
-## 消息内容：直接显示所有推送信息，不用二次点开再查看
-<img src="https://raw.githubusercontent.com/zzsj0928/ReadmeContents/main/Serverchand/MsgContentDetials.jpeg" width="500">
+### 配置页 · 推送平台与凭据
+
+推送平台改为分组多选，勾选后自动展开对应的配置项。
+
+<img src="screenshots/setting.png" width="820">
+
+### 在线设备 · 实时速率与表头排序
+
+新增页面。支持实时速率、备注编辑、点击表头排序（8 列三态循环）。
+
+<img src="screenshots/clients.png" width="820">
+
+### 高级设置
+
+超时、重试次数、线程数等参数调节。
+
+<img src="screenshots/advanced.png" width="820">
 
 # 下载
 - 本仓库（含本分支改动）：[441060226/luci-app-pushbot-lua Releases](https://github.com/441060226/luci-app-pushbot-lua/releases)
